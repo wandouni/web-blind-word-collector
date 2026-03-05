@@ -369,22 +369,24 @@
 
 /* ── Filters ─────────────────────────────────────────────── */
 .bw-filters {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
   gap: 5px;
   margin-bottom: 10px;
 }
 .bw-filter-btn {
-  flex: 1;
-  padding: 6px;
+  padding: 6px 4px;
   background: transparent;
   border: 1.5px solid var(--bw-filter-border);
   border-radius: 7px;
   color: var(--bw-filter-color);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.18s;
   font-family: inherit;
+  white-space: nowrap;
+  text-align: center;
 }
 .bw-filter-btn:hover {
   border-color: var(--bw-border-accent);
@@ -488,6 +490,12 @@
   align-items: center;
   gap: 8px;
 }
+.bw-item-tags {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
 
 .bw-checkbox {
   width: 16px;
@@ -524,6 +532,18 @@
   word-break: break-all;
   line-height: 1.4;
 }
+.bw-word-clickable {
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.bw-word-clickable:hover {
+  color: var(--bw-accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.bw-item.done .bw-word-clickable:hover {
+  color: var(--bw-done-text);
+}
 .bw-item.done .bw-word-text {
   text-decoration: line-through;
   color: var(--bw-done-text);
@@ -546,6 +566,31 @@
   background: var(--bw-badge-done-bg);
   color: var(--bw-badge-done-color);
   border: 1px solid var(--bw-badge-done-border);
+}
+
+/* Note badge */
+.bw-note-badge {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.bw-note-badge.has-note {
+  background: rgba(99, 179, 237, 0.12);
+  color: #2b6cb0;
+  border: 1px solid rgba(99, 179, 237, 0.35);
+}
+.bw-note-badge.no-note {
+  background: transparent;
+  color: var(--bw-text-muted);
+  border: 1px solid var(--bw-filter-border);
+  opacity: 0.6;
+}
+#blind-word-panel.theme-dark .bw-note-badge.has-note {
+  background: rgba(99, 179, 237, 0.10);
+  color: #90cdf4;
+  border-color: rgba(99, 179, 237, 0.25);
 }
 
 /* Item actions - always visible, inline in item-top */

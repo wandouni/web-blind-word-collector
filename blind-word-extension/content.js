@@ -113,6 +113,7 @@
           <button class="bw-filter-btn active" data-filter="all">全部</button>
           <button class="bw-filter-btn" data-filter="pending">待处理</button>
           <button class="bw-filter-btn" data-filter="done">已处理</button>
+          <button class="bw-filter-btn" data-filter="nonote">无备注</button>
         </div>
         <div class="bw-toolbar">
           <button class="bw-btn bw-btn-primary" id="bw-add-btn">＋ 添加盲词</button>
@@ -179,6 +180,7 @@
     let words = allWords;
     if (currentFilter === 'pending') words = words.filter(w => w.status === 'pending');
     if (currentFilter === 'done') words = words.filter(w => w.status === 'done');
+    if (currentFilter === 'nonote') words = words.filter(w => !w.note || !w.note.trim());
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       words = words.filter(w =>
@@ -228,8 +230,8 @@
       });
     });
 
-    list.querySelectorAll('.bw-action-edit').forEach(btn => {
-      btn.addEventListener('click', () => showEditModal(btn.dataset.id));
+    list.querySelectorAll('.bw-word-clickable').forEach(span => {
+      span.addEventListener('click', () => showEditModal(span.dataset.id));
     });
 
     list.querySelectorAll('.bw-action-delete').forEach(btn => {
@@ -251,14 +253,17 @@
     const isSelected = selectedIds.has(w.id);
     const statusLabel = isDone ? '已处理' : '待处理';
     const statusClass = isDone ? 'done' : 'pending';
+    const hasNote = w.note && w.note.trim();
     return `
       <div class="bw-item ${isDone ? 'done' : ''}" data-id="${w.id}">
         <div class="bw-item-top">
           <input type="checkbox" class="bw-checkbox" data-id="${w.id}" ${isDone && !batchMode ? 'checked' : ''} ${isSelected ? 'checked' : ''}>
-          <span class="bw-word-text">${escapeHtml(w.word)}</span>
-          <span class="bw-status-badge ${statusClass}">${statusLabel}</span>
+          <span class="bw-word-text bw-word-clickable" data-id="${w.id}">${escapeHtml(w.word)}</span>
+          <div class="bw-item-tags">
+            <span class="bw-status-badge ${statusClass}">${statusLabel}</span>
+            <span class="bw-note-badge ${hasNote ? 'has-note' : 'no-note'}">${hasNote ? '有备注' : '无备注'}</span>
+          </div>
           <div class="bw-item-actions">
-            <button class="bw-action-btn bw-action-edit" data-id="${w.id}" title="编辑">✏</button>
             <button class="bw-action-btn bw-action-delete" data-id="${w.id}" title="删除">🗑</button>
           </div>
         </div>
