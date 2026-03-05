@@ -2,6 +2,10 @@
 
 核心定位：帮用户收集、管理浏览网页时遇到的不理解、需学习的词语（盲词），打造个人专属学习清单。
 
+## 下载地址
+
+[ https://github.com/wandouni/web-blind-word-collector/releases/download/v1.0.0/blind-word-extension.zip]()
+
 ## 核心功能
 
 1. 盲词添加：选中网页文本右键「添加至盲词」，或在插件面板手动输入添加，自动记录词语、来源、时间等信息。
