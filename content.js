@@ -443,13 +443,23 @@
         let finalWord = newWord;
         let truncated = false;
         if (finalWord.length > 100) { finalWord = finalWord.substring(0, 100); truncated = true; }
-        await chrome.runtime.sendMessage({
+        const res = await chrome.runtime.sendMessage({
           type: 'UPDATE_WORD',
           data: { id, updates: { word: finalWord, note: newNote } }
         });
+        if (!res || !res.success) {
+          if (res?.reason === 'duplicate') {
+            showToast('该盲词已存在，请换一个词语', 'warning');
+          } else if (res?.reason === 'empty') {
+            showToast('盲词不能为空', 'warning');
+          } else {
+            showToast('保存失败，请重试', 'warning');
+          }
+          return;
+        }
         removeModal();
         await refreshWords();
-        showToast(truncated ? '已截取至100字符并保存' : '已保存');
+        showToast(res.truncated ? '已截取至100字符并保存' : '已保存');
       });
     }, true);
   }

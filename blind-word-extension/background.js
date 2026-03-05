@@ -37,49 +37,46 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     const selectedText = info.selectionText?.trim();
     if (!selectedText) return;
 
-    // Truncate if over 100 chars
-    let word = selectedText;
+    // 截断放在重复检测前，保证比较的是最终存入的文本
+    let word = selectedText.trim();
     let truncated = false;
     if (word.length > 100) {
       word = word.substring(0, 100);
       truncated = true;
     }
+    if (!word) return;
 
-    const now = new Date();
-    const addTime = formatDateTime(now);
+    await enqueueWrite(async () => {
+      const words = await getWords();
+      const exists = words.some(w => w.word === word);
 
-    const newEntry = {
-      id: Date.now().toString(),
-      word: word,
-      addTime: addTime,
-      pageTitle: tab.title || '无标题网页',
-      url: tab.url || '',
-      note: '',
-      status: 'pending' // 'pending' | 'done'
-    };
+      if (exists) {
+        chrome.tabs.sendMessage(tab.id, {
+          type: 'SHOW_TOAST',
+          message: '该盲词已存在，无需重复添加',
+          style: 'warning'
+        });
+        return;
+      }
 
-    // Check duplicate
-    const data = await getStorage();
-    const words = data.blindWords || [];
-    const exists = words.some(w => w.word === word);
+      const newEntry = {
+        id: Date.now().toString(),
+        word,
+        addTime: formatDateTime(new Date()),
+        pageTitle: tab.title || '无标题网页',
+        url: tab.url || '',
+        note: '',
+        status: 'pending'
+      };
 
-    if (exists) {
-      // Send message to content script
+      words.unshift(newEntry);
+      await saveWords(words);
+
       chrome.tabs.sendMessage(tab.id, {
         type: 'SHOW_TOAST',
-        message: '该盲词已存在，无需重复添加',
-        style: 'warning'
+        message: truncated ? '盲词已截取至100字符并添加成功' : '盲词添加成功',
+        style: 'success'
       });
-      return;
-    }
-
-    words.unshift(newEntry);
-    await setStorage({ blindWords: words });
-
-    chrome.tabs.sendMessage(tab.id, {
-      type: 'SHOW_TOAST',
-      message: truncated ? '盲词已截取至100字符并添加成功' : '盲词添加成功',
-      style: 'success'
     });
   }
 });
@@ -87,8 +84,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 // Handle messages from content script / panel
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'GET_WORDS') {
-    getStorage().then(data => {
-      sendResponse({ words: data.blindWords || [] });
+    getWords().then(words => {
+      sendResponse({ words });
     });
     return true;
   }
@@ -149,64 +146,117 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+// ── 串行写操作队列，防止并发竞态导致数据丢失 ──────────────────
+let _writeQueue = Promise.resolve();
+function enqueueWrite(fn) {
+  _writeQueue = _writeQueue.then(() => fn()).catch(err => console.error('write error', err));
+  return _writeQueue;
+}
+
+function getWords() {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get('blindWords', data => {
+      if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+      else resolve(data.blindWords || []);
+    });
+  });
+}
+
+function saveWords(words) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set({ blindWords: words }, () => {
+      if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+      else resolve();
+    });
+  });
+}
+
 async function handleAddWord(data, sendResponse) {
-  const storage = await getStorage();
-  const words = storage.blindWords || [];
+  await enqueueWrite(async () => {
+    // 截断逻辑在重复检测之前，保证比较的是最终存入的文本
+    let word = (data.word || '').trim();
+    let truncated = false;
+    if (word.length > 100) {
+      word = word.substring(0, 100);
+      truncated = true;
+    }
+    if (!word) {
+      sendResponse({ success: false, reason: 'empty' });
+      return;
+    }
 
-  const exists = words.some(w => w.word === data.word);
-  if (exists) {
-    sendResponse({ success: false, reason: 'duplicate' });
-    return;
-  }
+    const words = await getWords();
+    const exists = words.some(w => w.word === word);
+    if (exists) {
+      sendResponse({ success: false, reason: 'duplicate' });
+      return;
+    }
 
-  let word = data.word;
-  let truncated = false;
-  if (word.length > 100) {
-    word = word.substring(0, 100);
-    truncated = true;
-  }
+    const newEntry = {
+      id: Date.now().toString(),
+      word,
+      addTime: formatDateTime(new Date()),
+      pageTitle: data.pageTitle || '',
+      url: data.url || '',
+      note: data.note || '',
+      status: 'pending'
+    };
 
-  const newEntry = {
-    id: Date.now().toString(),
-    word: word,
-    addTime: formatDateTime(new Date()),
-    pageTitle: data.pageTitle || '',
-    url: data.url || '',
-    note: data.note || '',
-    status: 'pending'
-  };
-
-  words.unshift(newEntry);
-  await setStorage({ blindWords: words });
-  sendResponse({ success: true, truncated, entry: newEntry });
+    words.unshift(newEntry);
+    await saveWords(words);
+    sendResponse({ success: true, truncated, entry: newEntry });
+  });
 }
 
 async function handleUpdateWord(data, sendResponse) {
-  const storage = await getStorage();
-  const words = storage.blindWords || [];
-  const idx = words.findIndex(w => w.id === data.id);
-  if (idx === -1) {
-    sendResponse({ success: false });
-    return;
-  }
-  words[idx] = { ...words[idx], ...data.updates };
-  await setStorage({ blindWords: words });
-  sendResponse({ success: true, entry: words[idx] });
+  await enqueueWrite(async () => {
+    const words = await getWords();
+    const idx = words.findIndex(w => w.id === data.id);
+    if (idx === -1) {
+      sendResponse({ success: false, reason: 'not_found' });
+      return;
+    }
+
+    // 如果更新了 word 文本，做截断 + 重复检测（排除自身）
+    const updates = { ...data.updates };
+    if (updates.word !== undefined) {
+      let newWord = (updates.word || '').trim();
+      let truncated = false;
+      if (newWord.length > 100) { newWord = newWord.substring(0, 100); truncated = true; }
+      if (!newWord) {
+        sendResponse({ success: false, reason: 'empty' });
+        return;
+      }
+      const duplicate = words.some((w, i) => i !== idx && w.word === newWord);
+      if (duplicate) {
+        sendResponse({ success: false, reason: 'duplicate' });
+        return;
+      }
+      updates.word = newWord;
+      if (truncated) updates._truncated = true;
+    }
+
+    words[idx] = { ...words[idx], ...updates };
+    await saveWords(words);
+    sendResponse({ success: true, entry: words[idx], truncated: !!updates._truncated });
+  });
 }
 
 async function handleDeleteWord(id, sendResponse) {
-  const storage = await getStorage();
-  const words = (storage.blindWords || []).filter(w => w.id !== id);
-  await setStorage({ blindWords: words });
-  sendResponse({ success: true });
+  await enqueueWrite(async () => {
+    const words = await getWords();
+    await saveWords(words.filter(w => w.id !== id));
+    sendResponse({ success: true });
+  });
 }
 
 async function handleDeleteWords(ids, sendResponse) {
-  const storage = await getStorage();
-  const idSet = new Set(ids);
-  const words = (storage.blindWords || []).filter(w => !idSet.has(w.id));
-  await setStorage({ blindWords: words });
-  sendResponse({ success: true });
+  await enqueueWrite(async () => {
+    const idSet = new Set(ids);
+    const words = await getWords();
+    await saveWords(words.filter(w => !idSet.has(w.id)));
+    sendResponse({ success: true });
+  });
 }
 
 function getStorage() {
