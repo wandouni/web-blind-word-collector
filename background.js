@@ -118,6 +118,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'IMPORT_WORDS') {
+    handleImportWords(message.entries, sendResponse);
+    return true;
+  }
+
   if (message.type === 'GET_THEME') {
     getStorage().then(data => {
       sendResponse({ theme: data.theme || 'light' });
@@ -248,6 +253,40 @@ async function handleDeleteWord(id, sendResponse) {
     const words = await getWords();
     await saveWords(words.filter(w => w.id !== id));
     sendResponse({ success: true });
+  });
+}
+
+async function handleImportWords(entries, sendResponse) {
+  await enqueueWrite(async () => {
+    const words = await getWords();
+    const existingSet = new Set(words.map(w => w.word));
+    let added = 0, skipped = 0;
+
+    // 先收集所有新条目，保持导入文件中的顺序
+    const newEntries = [];
+    for (const entry of entries) {
+      if (!entry.word) continue;
+      if (existingSet.has(entry.word)) {
+        skipped++;
+        continue;
+      }
+      newEntries.push({
+        id: Date.now().toString() + '_' + Math.random().toString(36).slice(2, 7),
+        word:      entry.word,
+        addTime:   entry.addTime || formatDateTime(new Date()),
+        pageTitle: entry.pageTitle || '',
+        url:       entry.url || '',
+        note:      entry.note || '',
+        status:    entry.status === 'done' ? 'done' : 'pending',
+      });
+      existingSet.add(entry.word);
+      added++;
+    }
+    // 整体插到列表头部，顺序与导出文件保持一致
+    words.unshift(...newEntries);
+
+    await saveWords(words);
+    sendResponse({ success: true, added, skipped });
   });
 }
 

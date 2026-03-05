@@ -121,6 +121,8 @@
           <button class="bw-btn bw-btn-danger" id="bw-batch-delete" style="display:none" disabled>🗑 删除(<span id="bw-select-count">0</span>)</button>
           <button class="bw-btn bw-btn-ghost" id="bw-select-cancel" style="display:none">取消</button>
           <button class="bw-btn bw-btn-ghost" id="bw-export-btn">↓ 导出</button>
+          <button class="bw-btn bw-btn-ghost" id="bw-import-btn">↑ 导入</button>
+          <input type="file" id="bw-import-file" accept=".xls,.xlsx,.csv" style="display:none">
         </div>
       </div>
       <div class="bw-list-wrap" id="bw-list-wrap">
@@ -200,6 +202,14 @@
 
     // Export
     panel.querySelector('#bw-export-btn').addEventListener('click', showExportModal);
+    panel.querySelector('#bw-import-btn').addEventListener('click', () => {
+      panel.querySelector('#bw-import-file').value = '';
+      panel.querySelector('#bw-import-file').click();
+    });
+    panel.querySelector('#bw-import-file').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) doImport(file);
+    });
   }
 
   function getFilteredWords() {
@@ -291,7 +301,7 @@
       <div class="bw-item ${isDone ? 'done' : ''} ${isSelected ? 'bw-selected' : ''}" data-id="${w.id}">
         <div class="bw-item-top">
           ${batchMode ? `<input type="checkbox" class="bw-select-box" data-id="${w.id}" ${isSelected ? 'checked' : ''}>` : ''}
-          <input type="checkbox" class="bw-checkbox" data-id="${w.id}" ${isDone ? 'checked' : ''}>
+          ${!batchMode ? `<input type="checkbox" class="bw-checkbox" data-id="${w.id}" ${isDone ? 'checked' : ''}>` : ''}
           <span class="bw-word-text bw-word-clickable" data-id="${w.id}">${escapeHtml(w.word)}</span>
           <div class="bw-item-tags">
             <span class="bw-status-badge ${statusClass}">${statusLabel}</span>
@@ -623,6 +633,105 @@
       openPanel();
     }
   });
+
+  async function doImport(file) {
+    try {
+      const text = await readFileAsText(file);
+      let rows = [];
+
+      if (file.name.endsWith('.csv')) {
+        rows = parseCSV(text);
+      } else {
+        // XML SpreadsheetML (.xls) — same format as our export
+        rows = parseSpreadsheetML(text);
+      }
+
+      if (rows.length === 0) {
+        showToast('未找到可导入的数据', 'warning');
+        return;
+      }
+
+      // rows[0] 是表头行，跳过；之后每行对应一条盲词
+      // 列顺序：词语(0)、添加时间(1)、页面标题(2)、URL(3)、状态(4)、备注(5)
+      const dataRows = rows.slice(1).filter(r => r[0] && r[0].trim());
+      if (dataRows.length === 0) {
+        showToast('未找到有效盲词数据', 'warning');
+        return;
+      }
+
+      const entries = dataRows.map(r => ({
+        word:      (r[0] || '').trim().substring(0, 100),
+        addTime:   (r[1] || '').trim() || formatDateTime(new Date()),
+        pageTitle: (r[2] || '').trim(),
+        url:       (r[3] || '').trim(),
+        status:    (r[4] || '').trim() === '已处理' ? 'done' : 'pending',
+        note:      (r[5] || '').trim(),
+      })).filter(e => e.word);
+
+      // 批量发给 background 处理（去重、写入）
+      const res = await chrome.runtime.sendMessage({ type: 'IMPORT_WORDS', entries });
+      await refreshWords();
+      showToast(`导入完成：新增 ${res.added} 条，跳过重复 ${res.skipped} 条`);
+    } catch (err) {
+      console.error('import error', err);
+      showToast('导入失败，请检查文件格式', 'warning');
+    }
+  }
+
+  function readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = e => resolve(e.target.result);
+      reader.onerror = reject;
+      reader.readAsText(file, 'UTF-8');
+    });
+  }
+
+  function parseSpreadsheetML(xmlText) {
+    // 解析我们自己导出的 XML SpreadsheetML 格式
+    try {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(xmlText, 'text/xml');
+      const rows = doc.querySelectorAll('Row');
+      return Array.from(rows).map(row => {
+        const cells = row.querySelectorAll('Cell');
+        return Array.from(cells).map(cell => {
+          const data = cell.querySelector('Data');
+          return data ? data.textContent : '';
+        });
+      });
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function parseCSV(text) {
+    // 处理 BOM
+    const clean = text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
+    const lines = clean.split(/\r?\n/).filter(l => l.trim());
+    return lines.map(line => {
+      const cols = [];
+      let cur = '', inQuote = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') {
+          if (inQuote && line[i+1] === '"') { cur += '"'; i++; }
+          else inQuote = !inQuote;
+        } else if (ch === ',' && !inQuote) {
+          cols.push(cur); cur = '';
+        } else {
+          cur += ch;
+        }
+      }
+      cols.push(cur);
+      return cols;
+    });
+  }
+
+  function formatDateTime(date) {
+    const pad = n => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  }
 
   function escapeHtml(str) {
     return String(str || '')
