@@ -601,6 +601,40 @@
   flex-shrink: 0;
 }
 
+/* 多选框（批量选择专用） */
+.bw-select-box {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--bw-accent);
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+  flex-shrink: 0;
+  transition: all 0.18s;
+  appearance: none;
+  -webkit-appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.bw-select-box:checked {
+  background: var(--bw-accent);
+  border-color: var(--bw-accent);
+}
+.bw-select-box:checked::after {
+  content: '✓';
+  color: white;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 700;
+}
+
+/* 已选中词条高亮 */
+.bw-item.bw-selected {
+  background: var(--bw-accent-light) !important;
+  border-color: var(--bw-border-accent) !important;
+}
+
 .bw-action-btn {
   width: 26px;
   height: 26px;

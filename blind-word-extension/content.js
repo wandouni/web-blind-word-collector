@@ -117,7 +117,9 @@
         </div>
         <div class="bw-toolbar">
           <button class="bw-btn bw-btn-primary" id="bw-add-btn">＋ 添加盲词</button>
-          <button class="bw-btn bw-btn-danger" id="bw-batch-delete" disabled>🗑 批量删除</button>
+          <button class="bw-btn bw-btn-ghost" id="bw-select-btn">☑ 多选</button>
+          <button class="bw-btn bw-btn-danger" id="bw-batch-delete" style="display:none" disabled>🗑 删除(<span id="bw-select-count">0</span>)</button>
+          <button class="bw-btn bw-btn-ghost" id="bw-select-cancel" style="display:none">取消</button>
           <button class="bw-btn bw-btn-ghost" id="bw-export-btn">↓ 导出</button>
         </div>
       </div>
@@ -157,17 +159,45 @@
     // Add
     panel.querySelector('#bw-add-btn').addEventListener('click', showAddModal);
 
-    // Batch delete
+    // 进入多选模式
+    panel.querySelector('#bw-select-btn').addEventListener('click', () => {
+      batchMode = true;
+      selectedIds.clear();
+      panel.querySelector('#bw-select-btn').style.display = 'none';
+      panel.querySelector('#bw-batch-delete').style.display = '';
+      panel.querySelector('#bw-select-cancel').style.display = '';
+      panel.classList.add('bw-select-mode');
+      renderList();
+    });
+
+    // 取消多选模式
+    panel.querySelector('#bw-select-cancel').addEventListener('click', () => {
+      batchMode = false;
+      selectedIds.clear();
+      panel.querySelector('#bw-select-btn').style.display = '';
+      panel.querySelector('#bw-batch-delete').style.display = 'none';
+      panel.querySelector('#bw-select-cancel').style.display = 'none';
+      panel.classList.remove('bw-select-mode');
+      renderList();
+    });
+
+    // 批量删除
     panel.querySelector('#bw-batch-delete').addEventListener('click', () => {
       if (selectedIds.size === 0) return;
       showConfirmModal(
         `确认删除选中的 ${selectedIds.size} 条盲词？`,
         '',
         async () => {
+          const count = selectedIds.size;
           await chrome.runtime.sendMessage({ type: 'DELETE_WORDS', ids: [...selectedIds] });
+          batchMode = false;
           selectedIds.clear();
+          panel.querySelector('#bw-select-btn').style.display = '';
+          panel.querySelector('#bw-batch-delete').style.display = 'none';
+          panel.querySelector('#bw-select-cancel').style.display = 'none';
+          panel.classList.remove('bw-select-mode');
           await refreshWords();
-          showToast(`已删除 ${selectedIds.size || ''} 条盲词`);
+          showToast(`已删除 ${count} 条盲词`);
         }
       );
     });
@@ -211,27 +241,34 @@
     list.innerHTML = words.map(w => renderItem(w)).join('');
 
     // Bind item events
+    // checkbox 只负责状态切换（待处理 ↔ 已处理）
     list.querySelectorAll('.bw-checkbox').forEach(cb => {
       cb.addEventListener('change', async (e) => {
         const id = e.target.dataset.id;
         const checked = e.target.checked;
-        if (batchMode) {
-          if (checked) selectedIds.add(id);
-          else selectedIds.delete(id);
-          updateBatchBtn();
-        } else {
-          // Status toggle
-          const word = allWords.find(w => w.id === id);
-          if (!word) return;
-          const newStatus = word.status === 'pending' ? 'done' : 'pending';
-          await chrome.runtime.sendMessage({ type: 'UPDATE_WORD', data: { id, updates: { status: newStatus } } });
-          await refreshWords();
-        }
+        const word = allWords.find(w => w.id === id);
+        if (!word) return;
+        const newStatus = checked ? 'done' : 'pending';
+        await chrome.runtime.sendMessage({ type: 'UPDATE_WORD', data: { id, updates: { status: newStatus } } });
+        await refreshWords();
+      });
+    });
+
+    // 多选框（bw-select-box）只负责批量选中，与状态无关
+    list.querySelectorAll('.bw-select-box').forEach(box => {
+      box.addEventListener('change', (e) => {
+        const id = e.target.dataset.id;
+        if (e.target.checked) selectedIds.add(id);
+        else selectedIds.delete(id);
+        updateBatchBtn();
       });
     });
 
     list.querySelectorAll('.bw-word-clickable').forEach(span => {
-      span.addEventListener('click', () => showEditModal(span.dataset.id));
+      span.addEventListener('click', () => {
+        if (batchMode) return;
+        showEditModal(span.dataset.id);
+      });
     });
 
     list.querySelectorAll('.bw-action-delete').forEach(btn => {
@@ -255,17 +292,18 @@
     const statusClass = isDone ? 'done' : 'pending';
     const hasNote = w.note && w.note.trim();
     return `
-      <div class="bw-item ${isDone ? 'done' : ''}" data-id="${w.id}">
+      <div class="bw-item ${isDone ? 'done' : ''} ${isSelected ? 'bw-selected' : ''}" data-id="${w.id}">
         <div class="bw-item-top">
-          <input type="checkbox" class="bw-checkbox" data-id="${w.id}" ${isDone && !batchMode ? 'checked' : ''} ${isSelected ? 'checked' : ''}>
+          ${batchMode ? `<input type="checkbox" class="bw-select-box" data-id="${w.id}" ${isSelected ? 'checked' : ''}>` : ''}
+          <input type="checkbox" class="bw-checkbox" data-id="${w.id}" ${isDone ? 'checked' : ''}>
           <span class="bw-word-text bw-word-clickable" data-id="${w.id}">${escapeHtml(w.word)}</span>
           <div class="bw-item-tags">
             <span class="bw-status-badge ${statusClass}">${statusLabel}</span>
             <span class="bw-note-badge ${hasNote ? 'has-note' : 'no-note'}">${hasNote ? '有备注' : '无备注'}</span>
           </div>
-          <div class="bw-item-actions">
+          ${!batchMode ? `<div class="bw-item-actions">
             <button class="bw-action-btn bw-action-delete" data-id="${w.id}" title="删除">🗑</button>
-          </div>
+          </div>` : ''}
         </div>
       </div>
     `;
@@ -283,10 +321,9 @@
 
   function updateBatchBtn() {
     const btn = document.getElementById('bw-batch-delete');
-    if (btn) {
-      btn.disabled = selectedIds.size === 0;
-      btn.textContent = selectedIds.size > 0 ? `🗑 批量删除(${selectedIds.size})` : '🗑 批量删除';
-    }
+    const countEl = document.getElementById('bw-select-count');
+    if (btn) btn.disabled = selectedIds.size === 0;
+    if (countEl) countEl.textContent = selectedIds.size;
   }
 
   // ── Modals ─────────────────────────────────────────────────────────────
