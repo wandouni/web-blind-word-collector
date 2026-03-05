@@ -126,6 +126,12 @@
         </div>
       </div>
       <div class="bw-list-wrap" id="bw-list-wrap">
+        <div id="bw-select-all-bar" style="display:none">
+          <label class="bw-select-all-row">
+            <input type="checkbox" class="bw-select-box" id="bw-select-all-chk">
+            <span id="bw-select-all-label">全选</span>
+          </label>
+        </div>
         <div id="bw-list"></div>
       </div>
     `;
@@ -165,7 +171,9 @@
       panel.querySelector('#bw-batch-delete').style.display = '';
       panel.querySelector('#bw-select-cancel').style.display = '';
       panel.classList.add('bw-select-mode');
+      document.getElementById('bw-select-all-bar').style.display = '';
       renderList();
+      bindSelectAllChk();
     });
 
     // 取消多选模式
@@ -176,6 +184,7 @@
       panel.querySelector('#bw-batch-delete').style.display = 'none';
       panel.querySelector('#bw-select-cancel').style.display = 'none';
       panel.classList.remove('bw-select-mode');
+      document.getElementById('bw-select-all-bar').style.display = 'none';
       renderList();
     });
 
@@ -194,6 +203,7 @@
           panel.querySelector('#bw-batch-delete').style.display = 'none';
           panel.querySelector('#bw-select-cancel').style.display = 'none';
           panel.classList.remove('bw-select-mode');
+          document.getElementById('bw-select-all-bar').style.display = 'none';
           await refreshWords();
           showToast(`已删除 ${count} 条盲词`);
         }
@@ -267,6 +277,7 @@
         if (e.target.checked) selectedIds.add(id);
         else selectedIds.delete(id);
         updateBatchBtn();
+        syncSelectAllChk();
       });
     });
 
@@ -330,6 +341,35 @@
     const countEl = document.getElementById('bw-select-count');
     if (btn) btn.disabled = selectedIds.size === 0;
     if (countEl) countEl.textContent = selectedIds.size;
+  }
+
+  function bindSelectAllChk() {
+    const chk = document.getElementById('bw-select-all-chk');
+    if (!chk) return;
+    chk.addEventListener('change', () => {
+      const filtered = getFilteredWords();
+      if (chk.checked) {
+        filtered.forEach(w => selectedIds.add(w.id));
+      } else {
+        filtered.forEach(w => selectedIds.delete(w.id));
+      }
+      updateBatchBtn();
+      renderList();
+      // 重新绑定（renderList 会重建 DOM）
+      bindSelectAllChk();
+    });
+  }
+
+  function syncSelectAllChk() {
+    const chk = document.getElementById('bw-select-all-chk');
+    if (!chk) return;
+    const filtered = getFilteredWords();
+    const allSelected = filtered.length > 0 && filtered.every(w => selectedIds.has(w.id));
+    const someSelected = filtered.some(w => selectedIds.has(w.id));
+    chk.checked = allSelected;
+    chk.indeterminate = !allSelected && someSelected;
+    const label = document.getElementById('bw-select-all-label');
+    if (label) label.textContent = allSelected ? '全不选' : '全选';
   }
 
   // ── Modals ─────────────────────────────────────────────────────────────

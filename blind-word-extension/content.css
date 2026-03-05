@@ -814,10 +814,16 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 0;
-  margin-bottom: 6px;
+  padding: 8px 2px;
+  margin-bottom: 4px;
   font-size: 12px;
-  color: var(--bw-text-muted);
+  color: var(--bw-text-secondary);
+  cursor: pointer;
+  font-weight: 600;
+  user-select: none;
+}
+.bw-select-all-row:hover {
+  color: var(--bw-accent-text);
 }
 .bw-select-count {
   margin-left: auto;
