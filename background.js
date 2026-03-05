@@ -77,6 +77,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         message: truncated ? '盲词已截取至100字符并添加成功' : '盲词添加成功',
         style: 'success'
       });
+      chrome.tabs.sendMessage(tab.id, { type: 'REFRESH_PANEL' });
     });
   }
 });

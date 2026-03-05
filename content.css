@@ -45,7 +45,7 @@
   pointer-events: none;
 }
 #blind-word-panel-overlay.active {
-  pointer-events: all;
+  pointer-events: none;
 }
 
 /* ── Panel shell ─────────────────────────────────────────── */
@@ -53,6 +53,7 @@
   position: fixed;
   top: 0;
   right: -420px;
+  pointer-events: all;
   width: 400px;
   height: 100vh;
   z-index: 2147483641;

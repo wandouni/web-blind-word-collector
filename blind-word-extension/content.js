@@ -135,10 +135,6 @@
 
     // Theme toggle
     panel.querySelector('#bw-theme-toggle').addEventListener('click', toggleTheme);
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) closePanel();
-    });
-
     // Search
     panel.querySelector('#bw-search').addEventListener('input', (e) => {
       searchQuery = e.target.value.trim();
@@ -610,6 +606,9 @@
   chrome.runtime.onMessage.addListener((message) => {
     if (message.type === 'SHOW_TOAST') {
       showToast(message.message, message.style);
+    }
+    if (message.type === 'REFRESH_PANEL') {
+      if (panelOpen) refreshWords();
     }
     if (message.type === 'TOGGLE_PANEL') {
       if (panelOpen) closePanel();
