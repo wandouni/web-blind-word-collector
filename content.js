@@ -1,0 +1,564 @@
+// content.js
+(function() {
+  'use strict';
+
+  let panelOpen = false;
+  let allWords = [];
+  let currentFilter = 'all';
+  let searchQuery = '';
+  let selectedIds = new Set();
+  let batchMode = false;
+
+  // ── Toast ──────────────────────────────────────────────────────────────
+  function showToast(message, style = 'success') {
+    let toast = document.getElementById('blind-word-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'blind-word-toast';
+      document.body.appendChild(toast);
+    }
+    toast.className = `${style}`;
+    toast.textContent = message;
+    requestAnimationFrame(() => {
+      toast.classList.add('show');
+    });
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => {
+      toast.classList.remove('show');
+    }, 3000);
+  }
+
+  // ── Panel ──────────────────────────────────────────────────────────────
+  function buildPanel() {
+    if (document.getElementById('blind-word-panel')) return;
+
+    const overlay = document.createElement('div');
+    overlay.id = 'blind-word-panel-overlay';
+
+    const panel = document.createElement('div');
+    panel.id = 'blind-word-panel';
+    panel.innerHTML = getPanelHTML();
+
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+
+    bindEvents(panel, overlay);
+  }
+
+  function getPanelHTML() {
+    return `
+      <div class="bw-header">
+        <div class="bw-header-top">
+          <div class="bw-logo">
+            <div class="bw-logo-icon">📚</div>
+            <span class="bw-title">盲词管理</span>
+          </div>
+          <button class="bw-close-btn" id="bw-close">✕</button>
+        </div>
+        <div class="bw-stats" id="bw-stats">
+          <div class="bw-stat-item">
+            <div class="bw-stat-num" id="bw-total">0</div>
+            <div class="bw-stat-label">全部</div>
+          </div>
+          <div class="bw-stat-item">
+            <div class="bw-stat-num" id="bw-pending">0</div>
+            <div class="bw-stat-label">待处理</div>
+          </div>
+          <div class="bw-stat-item">
+            <div class="bw-stat-num" id="bw-done">0</div>
+            <div class="bw-stat-label">已处理</div>
+          </div>
+        </div>
+        <div class="bw-search-wrap">
+          <span class="bw-search-icon">🔍</span>
+          <input class="bw-search" id="bw-search" placeholder="搜索盲词、备注..." type="text">
+        </div>
+        <div class="bw-filters">
+          <button class="bw-filter-btn active" data-filter="all">全部</button>
+          <button class="bw-filter-btn" data-filter="pending">待处理</button>
+          <button class="bw-filter-btn" data-filter="done">已处理</button>
+        </div>
+        <div class="bw-toolbar">
+          <button class="bw-btn bw-btn-primary" id="bw-add-btn">＋ 添加盲词</button>
+          <button class="bw-btn bw-btn-danger" id="bw-batch-delete" disabled>🗑 批量删除</button>
+          <button class="bw-btn bw-btn-ghost" id="bw-export-btn">↓ 导出</button>
+        </div>
+      </div>
+      <div class="bw-list-wrap" id="bw-list-wrap">
+        <div id="bw-list"></div>
+      </div>
+    `;
+  }
+
+  function bindEvents(panel, overlay) {
+    // Close
+    panel.querySelector('#bw-close').addEventListener('click', closePanel);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) closePanel();
+    });
+
+    // Search
+    panel.querySelector('#bw-search').addEventListener('input', (e) => {
+      searchQuery = e.target.value.trim();
+      renderList();
+    });
+
+    // Filters
+    panel.querySelectorAll('.bw-filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        panel.querySelectorAll('.bw-filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentFilter = btn.dataset.filter;
+        selectedIds.clear();
+        renderList();
+      });
+    });
+
+    // Add
+    panel.querySelector('#bw-add-btn').addEventListener('click', showAddModal);
+
+    // Batch delete
+    panel.querySelector('#bw-batch-delete').addEventListener('click', () => {
+      if (selectedIds.size === 0) return;
+      showConfirmModal(
+        `确认删除选中的 ${selectedIds.size} 条盲词？`,
+        '',
+        async () => {
+          await chrome.runtime.sendMessage({ type: 'DELETE_WORDS', ids: [...selectedIds] });
+          selectedIds.clear();
+          await refreshWords();
+          showToast(`已删除 ${selectedIds.size || ''} 条盲词`);
+        }
+      );
+    });
+
+    // Export
+    panel.querySelector('#bw-export-btn').addEventListener('click', showExportModal);
+  }
+
+  function getFilteredWords() {
+    let words = allWords;
+    if (currentFilter === 'pending') words = words.filter(w => w.status === 'pending');
+    if (currentFilter === 'done') words = words.filter(w => w.status === 'done');
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      words = words.filter(w =>
+        w.word.toLowerCase().includes(q) ||
+        (w.note || '').toLowerCase().includes(q)
+      );
+    }
+    return words;
+  }
+
+  function renderList() {
+    const list = document.getElementById('bw-list');
+    if (!list) return;
+
+    const words = getFilteredWords();
+    updateStats();
+    updateBatchBtn();
+
+    if (words.length === 0) {
+      list.innerHTML = `
+        <div class="bw-empty">
+          <div class="bw-empty-icon">🔍</div>
+          <div class="bw-empty-text">${searchQuery ? '没有匹配的盲词' : '暂无盲词，开始添加吧'}</div>
+        </div>`;
+      return;
+    }
+
+    list.innerHTML = words.map(w => renderItem(w)).join('');
+
+    // Bind item events
+    list.querySelectorAll('.bw-checkbox').forEach(cb => {
+      cb.addEventListener('change', async (e) => {
+        const id = e.target.dataset.id;
+        const checked = e.target.checked;
+        if (batchMode) {
+          if (checked) selectedIds.add(id);
+          else selectedIds.delete(id);
+          updateBatchBtn();
+        } else {
+          // Status toggle
+          const word = allWords.find(w => w.id === id);
+          if (!word) return;
+          const newStatus = word.status === 'pending' ? 'done' : 'pending';
+          await chrome.runtime.sendMessage({ type: 'UPDATE_WORD', data: { id, updates: { status: newStatus } } });
+          await refreshWords();
+        }
+      });
+    });
+
+    list.querySelectorAll('.bw-action-edit').forEach(btn => {
+      btn.addEventListener('click', () => showEditModal(btn.dataset.id));
+    });
+
+    list.querySelectorAll('.bw-action-delete').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const word = allWords.find(w => w.id === btn.dataset.id);
+        showConfirmModal('确认删除以下盲词？', word?.word || '', async () => {
+          await chrome.runtime.sendMessage({ type: 'DELETE_WORD', id: btn.dataset.id });
+          await refreshWords();
+          showToast('盲词已删除');
+        });
+      });
+    });
+
+    // Clickable URLs
+    list.querySelectorAll('.bw-url-link').forEach(a => {
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        chrome.runtime.sendMessage({ type: 'OPEN_URL', url: a.href });
+        window.open(a.href, '_blank');
+      });
+    });
+  }
+
+  function renderItem(w) {
+    const isDone = w.status === 'done';
+    const isSelected = selectedIds.has(w.id);
+    const statusLabel = isDone ? '已处理' : '待处理';
+    const statusClass = isDone ? 'done' : 'pending';
+    const shortUrl = w.url ? (w.url.length > 40 ? w.url.substring(0, 40) + '…' : w.url) : '—';
+
+    return `
+      <div class="bw-item ${isDone ? 'done' : ''}" data-id="${w.id}">
+        <div class="bw-item-top">
+          <input type="checkbox" class="bw-checkbox" data-id="${w.id}" ${isDone && !batchMode ? 'checked' : ''} ${isSelected ? 'checked' : ''}>
+          <span class="bw-word-text">${escapeHtml(w.word)}</span>
+          <span class="bw-status-badge ${statusClass}">${statusLabel}</span>
+        </div>
+        <div class="bw-item-meta">
+          <div class="bw-meta-row">
+            <span class="bw-meta-label">添加时间</span>
+            <span class="bw-meta-value">${w.addTime}</span>
+          </div>
+          <div class="bw-meta-row">
+            <span class="bw-meta-label">页面标题</span>
+            <span class="bw-meta-value">${escapeHtml(w.pageTitle || '—')}</span>
+          </div>
+          <div class="bw-meta-row">
+            <span class="bw-meta-label">来源URL</span>
+            <span class="bw-meta-value">${w.url ? `<a href="${escapeHtml(w.url)}" class="bw-url-link" title="${escapeHtml(w.url)}">${escapeHtml(shortUrl)}</a>` : '—'}</span>
+          </div>
+          ${w.note ? `<div class="bw-meta-row">
+            <span class="bw-meta-label">备注</span>
+            <span class="bw-meta-value">${escapeHtml(w.note)}</span>
+          </div>` : ''}
+        </div>
+        <div class="bw-item-actions">
+          <button class="bw-action-btn bw-action-edit" data-id="${w.id}">✏ 编辑</button>
+          <button class="bw-action-btn bw-action-delete" data-id="${w.id}">🗑 删除</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function updateStats() {
+    const total = allWords.length;
+    const pending = allWords.filter(w => w.status === 'pending').length;
+    const done = allWords.filter(w => w.status === 'done').length;
+    const el = (id) => document.getElementById(id);
+    if (el('bw-total')) el('bw-total').textContent = total;
+    if (el('bw-pending')) el('bw-pending').textContent = pending;
+    if (el('bw-done')) el('bw-done').textContent = done;
+  }
+
+  function updateBatchBtn() {
+    const btn = document.getElementById('bw-batch-delete');
+    if (btn) {
+      btn.disabled = selectedIds.size === 0;
+      btn.textContent = selectedIds.size > 0 ? `🗑 批量删除(${selectedIds.size})` : '🗑 批量删除';
+    }
+  }
+
+  // ── Modals ─────────────────────────────────────────────────────────────
+  function showModal(html, onMount) {
+    removeModal();
+    const backdrop = document.createElement('div');
+    backdrop.className = 'bw-modal-backdrop';
+    backdrop.id = 'bw-modal-backdrop';
+    const modal = document.createElement('div');
+    modal.className = 'bw-modal';
+    modal.innerHTML = html;
+    backdrop.appendChild(modal);
+    document.getElementById('blind-word-panel-overlay').appendChild(backdrop);
+    if (onMount) onMount(modal);
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) removeModal();
+    });
+  }
+
+  function removeModal() {
+    document.getElementById('bw-modal-backdrop')?.remove();
+  }
+
+  function showAddModal() {
+    const pageTitle = document.title || '';
+    const pageUrl = window.location.href || '';
+
+    showModal(`
+      <div class="bw-modal-title">＋ 添加盲词</div>
+      <div class="bw-form-group">
+        <label class="bw-form-label">盲词 *</label>
+        <input class="bw-form-input" id="bw-new-word" placeholder="输入盲词（最多100字符）" maxlength="100">
+      </div>
+      <div class="bw-form-group">
+        <label class="bw-form-label">页面标题</label>
+        <input class="bw-form-input" id="bw-new-title" placeholder="可选" value="${escapeHtml(pageTitle)}">
+      </div>
+      <div class="bw-form-group">
+        <label class="bw-form-label">来源URL</label>
+        <input class="bw-form-input" id="bw-new-url" placeholder="可选" value="${escapeHtml(pageUrl)}">
+      </div>
+      <div class="bw-form-group">
+        <label class="bw-form-label">备注</label>
+        <textarea class="bw-form-textarea" id="bw-new-note" placeholder="可选：释义、学习心得等"></textarea>
+      </div>
+      <div class="bw-modal-actions">
+        <button class="bw-btn bw-btn-ghost" id="bw-modal-cancel">取消</button>
+        <button class="bw-btn bw-btn-primary" id="bw-modal-confirm">添加</button>
+      </div>
+    `, (modal) => {
+      modal.querySelector('#bw-new-word').focus();
+      modal.querySelector('#bw-modal-cancel').addEventListener('click', removeModal);
+      modal.querySelector('#bw-modal-confirm').addEventListener('click', async () => {
+        const word = modal.querySelector('#bw-new-word').value.trim();
+        if (!word) { showToast('请输入盲词', 'warning'); return; }
+        const res = await chrome.runtime.sendMessage({
+          type: 'ADD_WORD',
+          data: {
+            word,
+            pageTitle: modal.querySelector('#bw-new-title').value.trim(),
+            url: modal.querySelector('#bw-new-url').value.trim(),
+            note: modal.querySelector('#bw-new-note').value.trim()
+          }
+        });
+        if (res.success) {
+          removeModal();
+          await refreshWords();
+          showToast(res.truncated ? '盲词已截取至100字符并添加成功' : '盲词添加成功');
+        } else if (res.reason === 'duplicate') {
+          showToast('该盲词已存在，无需重复添加', 'warning');
+        }
+      });
+    });
+  }
+
+  function showEditModal(id) {
+    const word = allWords.find(w => w.id === id);
+    if (!word) return;
+    showModal(`
+      <div class="bw-modal-title">✏ 编辑盲词</div>
+      <div class="bw-form-group">
+        <label class="bw-form-label">盲词</label>
+        <input class="bw-form-input" id="bw-edit-word" value="${escapeHtml(word.word)}" maxlength="100">
+      </div>
+      <div class="bw-form-group">
+        <label class="bw-form-label">添加时间（不可修改）</label>
+        <input class="bw-form-input" value="${word.addTime}" disabled>
+      </div>
+      <div class="bw-form-group">
+        <label class="bw-form-label">页面标题（不可修改）</label>
+        <input class="bw-form-input" value="${escapeHtml(word.pageTitle || '')}" disabled>
+      </div>
+      <div class="bw-form-group">
+        <label class="bw-form-label">来源URL（不可修改）</label>
+        <input class="bw-form-input" value="${escapeHtml(word.url || '')}" disabled>
+      </div>
+      <div class="bw-form-group">
+        <label class="bw-form-label">备注</label>
+        <textarea class="bw-form-textarea" id="bw-edit-note">${escapeHtml(word.note || '')}</textarea>
+      </div>
+      <div class="bw-modal-actions">
+        <button class="bw-btn bw-btn-ghost" id="bw-modal-cancel">取消</button>
+        <button class="bw-btn bw-btn-primary" id="bw-modal-confirm">保存</button>
+      </div>
+    `, (modal) => {
+      modal.querySelector('#bw-modal-cancel').addEventListener('click', removeModal);
+      modal.querySelector('#bw-modal-confirm').addEventListener('click', async () => {
+        const newWord = modal.querySelector('#bw-edit-word').value.trim();
+        const newNote = modal.querySelector('#bw-edit-note').value.trim();
+        if (!newWord) { showToast('盲词不能为空', 'warning'); return; }
+        let finalWord = newWord;
+        let truncated = false;
+        if (finalWord.length > 100) { finalWord = finalWord.substring(0, 100); truncated = true; }
+        await chrome.runtime.sendMessage({
+          type: 'UPDATE_WORD',
+          data: { id, updates: { word: finalWord, note: newNote } }
+        });
+        removeModal();
+        await refreshWords();
+        showToast(truncated ? '已截取至100字符并保存' : '已保存');
+      });
+    });
+  }
+
+  function showConfirmModal(text, wordText, onConfirm) {
+    showModal(`
+      <div class="bw-modal-title">⚠ 确认删除</div>
+      <p class="bw-confirm-text">${escapeHtml(text)}</p>
+      ${wordText ? `<div class="bw-confirm-word">${escapeHtml(wordText)}</div>` : ''}
+      <div class="bw-modal-actions" style="margin-top:20px">
+        <button class="bw-btn bw-btn-ghost" id="bw-modal-cancel">取消</button>
+        <button class="bw-btn bw-btn-danger" id="bw-modal-confirm">确认删除</button>
+      </div>
+    `, (modal) => {
+      modal.querySelector('#bw-modal-cancel').addEventListener('click', removeModal);
+      modal.querySelector('#bw-modal-confirm').addEventListener('click', async () => {
+        removeModal();
+        await onConfirm();
+      });
+    });
+  }
+
+  function showExportModal() {
+    let exportFilter = 'all';
+    showModal(`
+      <div class="bw-modal-title">↓ 导出盲词</div>
+      <p style="font-size:13px;color:#888;margin-bottom:14px">选择导出范围：</p>
+      <div class="bw-export-opts">
+        <button class="bw-export-opt active" data-val="all">全部</button>
+        <button class="bw-export-opt" data-val="pending">待处理</button>
+        <button class="bw-export-opt" data-val="done">已处理</button>
+      </div>
+      <div class="bw-modal-actions" style="margin-top:20px">
+        <button class="bw-btn bw-btn-ghost" id="bw-modal-cancel">取消</button>
+        <button class="bw-btn bw-btn-primary" id="bw-modal-confirm">导出 Excel</button>
+      </div>
+    `, (modal) => {
+      modal.querySelectorAll('.bw-export-opt').forEach(btn => {
+        btn.addEventListener('click', () => {
+          modal.querySelectorAll('.bw-export-opt').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          exportFilter = btn.dataset.val;
+        });
+      });
+      modal.querySelector('#bw-modal-cancel').addEventListener('click', removeModal);
+      modal.querySelector('#bw-modal-confirm').addEventListener('click', () => {
+        removeModal();
+        doExport(exportFilter);
+      });
+    });
+  }
+
+  function doExport(filter) {
+    let words = allWords;
+    if (filter === 'pending') words = words.filter(w => w.status === 'pending');
+    if (filter === 'done') words = words.filter(w => w.status === 'done');
+
+    // Build CSV-style data, then convert to Excel-compatible format
+    const headers = ['词语', '添加时间', '页面标题', 'URL', '状态', '备注'];
+    const rows = words.map(w => [
+      w.word,
+      w.addTime,
+      w.pageTitle || '',
+      w.url || '',
+      w.status === 'done' ? '已处理' : '待处理',
+      w.note || ''
+    ]);
+
+    // Generate a proper XLSX using a simple XML-based format
+    const xlsxContent = generateXLSX(headers, rows);
+    const blob = new Blob([xlsxContent], { type: 'application/vnd.ms-excel;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const now = new Date();
+    const ts = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
+    a.download = `盲词管理_${ts}.xls`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(`已导出 ${words.length} 条盲词`);
+  }
+
+  function generateXLSX(headers, rows) {
+    const esc = s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    let xml = `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+<Styles>
+  <Style ss:ID="header">
+    <Font ss:Bold="1" ss:Color="#FFFFFF"/>
+    <Interior ss:Color="#6C63FF" ss:Pattern="Solid"/>
+  </Style>
+</Styles>
+<Worksheet ss:Name="盲词列表">
+<Table>
+`;
+    // Header row
+    xml += '<Row>';
+    headers.forEach(h => {
+      xml += `<Cell ss:StyleID="header"><Data ss:Type="String">${esc(h)}</Data></Cell>`;
+    });
+    xml += '</Row>\n';
+
+    // Data rows
+    rows.forEach(row => {
+      xml += '<Row>';
+      row.forEach(cell => {
+        xml += `<Cell><Data ss:Type="String">${esc(cell)}</Data></Cell>`;
+      });
+      xml += '</Row>\n';
+    });
+
+    xml += '</Table></Worksheet></Workbook>';
+    return '\uFEFF' + xml;
+  }
+
+  // ── Panel open/close ───────────────────────────────────────────────────
+  async function openPanel() {
+    buildPanel();
+    await refreshWords();
+    const panel = document.getElementById('blind-word-panel');
+    const overlay = document.getElementById('blind-word-panel-overlay');
+    overlay.classList.add('active');
+    requestAnimationFrame(() => panel.classList.add('open'));
+    panelOpen = true;
+  }
+
+  function closePanel() {
+    const panel = document.getElementById('blind-word-panel');
+    const overlay = document.getElementById('blind-word-panel-overlay');
+    if (!panel) return;
+    panel.classList.remove('open');
+    overlay.classList.remove('active');
+    panelOpen = false;
+    removeModal();
+  }
+
+  async function refreshWords() {
+    const res = await chrome.runtime.sendMessage({ type: 'GET_WORDS' });
+    allWords = res.words || [];
+    renderList();
+  }
+
+  // ── Message listener ───────────────────────────────────────────────────
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.type === 'SHOW_TOAST') {
+      showToast(message.message, message.style);
+    }
+    if (message.type === 'TOGGLE_PANEL') {
+      if (panelOpen) closePanel();
+      else openPanel();
+    }
+  });
+
+  // ── Extension icon click listener via storage ──────────────────────────
+  // Listen for icon click via chrome.action
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === 'OPEN_PANEL') {
+      openPanel();
+    }
+  });
+
+  function escapeHtml(str) {
+    return String(str || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+})();
