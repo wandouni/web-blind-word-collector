@@ -60,8 +60,6 @@
   flex-direction: column;
   transition: right 0.32s cubic-bezier(0.4, 0, 0.2, 1);
   font-family: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
-  overflow: hidden;
-
   /* ── LIGHT THEME (default) ───────────────────────────── */
   --bw-bg:            #ffffff;
   --bw-bg2:           #f5f4ff;

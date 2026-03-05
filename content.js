@@ -294,7 +294,7 @@
     modal.className = wide ? 'bw-modal bw-modal-wide' : 'bw-modal';
     modal.innerHTML = html;
     backdrop.appendChild(modal);
-    document.getElementById('blind-word-panel-overlay').appendChild(backdrop);
+    document.getElementById('blind-word-panel').appendChild(backdrop);
     if (onMount) onMount(modal);
     backdrop.addEventListener('click', (e) => {
       if (e.target === backdrop) removeModal();
